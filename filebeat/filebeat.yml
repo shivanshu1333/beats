@@ -178,10 +178,10 @@ filebeat.config.modules:
 # console output using json codec
 
 output.console:
-  codec.json:
+  codec.otlp:
 #    file: "fb.json"
-    pretty: true
-    escape_html: false
+#    pretty: true
+#    escape_html: false
 
 # ---------------------------- Elasticsearch Output ----------------------------
 #output.elasticsearch:
