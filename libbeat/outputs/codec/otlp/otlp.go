@@ -11,14 +11,14 @@ import (
 	"github.com/elastic/go-structform/gotype"
 )
 
-// Encoder for serializing a beat.Event to json.
+// Encoder for serializing a beat.Event to otlp.
 type Encoder struct {
 	buf    bytes.Buffer
 	folder *gotype.Iterator
 
 	version string
 	//OtlpResourceLogs *otlplogs.ResourceLogs
-	OtlpEncoder *Codec
+	OtlpEncoder Codec
 	config Config
 	logger *logp.Logger
 }
@@ -43,7 +43,7 @@ func init() {
 	})
 }
 
-// New creates a new json Encoder.
+// New creates a new otlp Encoder.
 func New(version string, config Config) *Encoder {
 	e := &Encoder{version: version, config: config}
 	e.reset()
@@ -62,17 +62,19 @@ func (e *Encoder) reset() {
 // `@metadata` namespace.
 func (e *Encoder) Encode(index string, event *beat.Event) ([]byte, error) {
 	e.buf.Reset()
-	err := e.folder.Fold(makeEvent(index, e.version, event))
-	if err != nil {
-		e.reset()
-		return nil, err
-	}
-	buf, er := e.OtlpEncoder.NewCodec(event)
+	//err := e.folder.Fold(makeEvent(index, e.version, event))
+	//if err != nil {
+	//	e.reset()
+	//	return nil, err
+	//}
+	e.OtlpEncoder = e.OtlpEncoder.NewCodec()
+	buf, er := e.OtlpEncoder.AddLogs(event)
 	if er != nil {
 		e.logger.Warn("Error ", er, "on creating new otlp codec")
 		e.logger.Warn("Beat event is ", event)
 		return nil, er
 	}
+	_ , er = e.OtlpEncoder.Unmarshal(buf)
 
 	//var buf bytes.Buffer
 	//if err = stdjson.Indent(&buf, json, "", "  "); err != nil {

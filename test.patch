@@ -1,0 +1,176 @@
+diff --git a/libbeat/outputs/codec/otlp/otlp.go b/libbeat/outputs/codec/otlp/otlp.go
+index 3e4120f87d..85b2c153a2 100644
+--- a/libbeat/outputs/codec/otlp/otlp.go
++++ b/libbeat/outputs/codec/otlp/otlp.go
+@@ -18,7 +18,7 @@ type Encoder struct {
+ 
+ 	version string
+ 	//OtlpResourceLogs *otlplogs.ResourceLogs
+-	OtlpEncoder *Codec
++	OtlpEncoder Codec
+ 	config Config
+ 	logger *logp.Logger
+ }
+@@ -62,17 +62,19 @@ func (e *Encoder) reset() {
+ // `@metadata` namespace.
+ func (e *Encoder) Encode(index string, event *beat.Event) ([]byte, error) {
+ 	e.buf.Reset()
+-	err := e.folder.Fold(makeEvent(index, e.version, event))
+-	if err != nil {
+-		e.reset()
+-		return nil, err
+-	}
+-	buf, er := e.OtlpEncoder.NewCodec(event)
++	//err := e.folder.Fold(makeEvent(index, e.version, event))
++	//if err != nil {
++	//	e.reset()
++	//	return nil, err
++	//}
++	e.OtlpEncoder = e.OtlpEncoder.NewCodec()
++	buf, er := e.OtlpEncoder.AddLogs(event)
+ 	if er != nil {
+ 		e.logger.Warn("Error ", er, "on creating new otlp codec")
+ 		e.logger.Warn("Beat event is ", event)
+ 		return nil, er
+ 	}
++	_ , er = e.OtlpEncoder.Unmarshal(buf)
+ 
+ 	//var buf bytes.Buffer
+ 	//if err = stdjson.Indent(&buf, json, "", "  "); err != nil {
+diff --git a/libbeat/outputs/codec/otlp/otlpCodec.go b/libbeat/outputs/codec/otlp/otlpCodec.go
+index 5e489b073b..b548209e59 100644
+--- a/libbeat/outputs/codec/otlp/otlpCodec.go
++++ b/libbeat/outputs/codec/otlp/otlpCodec.go
+@@ -3,27 +3,90 @@ package otlp
+ import (
+ 	"github.com/elastic/beats/v7/libbeat/beat"
+ 	"github.com/golang/protobuf/proto"
++	otlpcommon "go.opentelemetry.io/proto/otlp/common/v1"
+ 	otlplogs "go.opentelemetry.io/proto/otlp/logs/v1"
++	"sync"
+ )
+ 
+ type Codec struct {
+-	//sync.Mutex
++	sync.Mutex
+ 	OtlpResourceLogs *otlplogs.ResourceLogs
+ }
+ 
++type AttributeValue struct {
++	orig *otlpcommon.AnyValue
++}
++
++type LogRecord struct {
++	orig *otlplogs.LogRecord
++}
++
++
++func (c Codec) NewCodec() Codec {
++	return Codec{OtlpResourceLogs: &otlplogs.ResourceLogs{}}
++}
++
++func (c *Codec) AddLogs(event *beat.Event) ([]byte, error) {
++	//c.OtlpResourceLogs.Reset()
++	c = AddEmptyInstrumentationLibraryLogs(c)
++	c = AddEmptyLogRecord(c)
++	c = AddTimeStamp(event, c)
++	c = PopulateLogRecord(event, c)
++
+ 
+ 
+-func (c *Codec) NewCodec(event *beat.Event) ([]byte, error) {
+-	c.OtlpResourceLogs.Reset()
+-	c.OtlpResourceLogs.InstrumentationLibraryLogs[0].Logs[0].TimeUnixNano = uint64(event.Timestamp.UnixNano())
+ 	//c.OtlpResourceLogs, er := addTimestamp();
+-	buf, err := proto.Marshal(c.OtlpResourceLogs)
++	//buf, err := proto.Marshal(c.OtlpResourceLogs)
++	buf, err := Marshaler(c)
+ 	return buf, err
+ }
++
++func (c *Codec) Unmarshal(buf []byte) (*otlplogs.ResourceLogs, error) {
++	ld := &otlplogs.ResourceLogs{}
++	err := proto.Unmarshal(buf, ld)
++	return ld, err
++}
++
++func AddEmptyInstrumentationLibraryLogs(c *Codec) *Codec {
++	c.OtlpResourceLogs.InstrumentationLibraryLogs = append(c.OtlpResourceLogs.InstrumentationLibraryLogs, &otlplogs.InstrumentationLibraryLogs{})
++	return c
++}
++
++func AddEmptyLogRecord(c *Codec) *Codec {
++	c.OtlpResourceLogs.InstrumentationLibraryLogs[0].Logs = append(c.OtlpResourceLogs.InstrumentationLibraryLogs[0].Logs, &otlplogs.LogRecord{})
++	return c
++}
++
++func AddTimeStamp(event *beat.Event, c *Codec) *Codec {
++	c.OtlpResourceLogs.InstrumentationLibraryLogs[0].Logs[0].TimeUnixNano = uint64(event.Timestamp.UnixNano())
++	return c
++}
++
++func PopulateLogRecord(event *beat.Event, c *Codec) *Codec {
++	c.OtlpResourceLogs.InstrumentationLibraryLogs[0].Logs[0].Body = new(otlpcommon.AnyValue)
++	c.OtlpResourceLogs.InstrumentationLibraryLogs[0].Logs[0].Body.Value = &otlpcommon.AnyValue_StringValue{StringValue: event.Fields["message"].(string) }
++	return c
++}
++
++func Marshaler(c *Codec) ([]byte, error){
++	buf, err := proto.Marshal(c.OtlpResourceLogs)
++	return buf,err
++}
++
++//func Body() AttributeValue {
++//	return newAttributeValue(&(*otlplogs.LogRecord))
++//}
++
++func newAttributeValue(orig *otlpcommon.AnyValue) *otlpcommon.AnyValue {
++	return orig
++}
++
+ //
+-//func addTimestamp(){
++//func addTimestamp(c *Codec, event *beat.Event){
+ //
+ //}
++
++
+ //
+ //func createNewOtlpResourceLogs(){
+ //
+diff --git a/libbeat/outputs/console/console.go b/libbeat/outputs/console/console.go
+index bbce8f449a..9a5d41dfec 100644
+--- a/libbeat/outputs/console/console.go
++++ b/libbeat/outputs/console/console.go
+@@ -21,6 +21,8 @@ import (
+ 	"bufio"
+ 	"context"
+ 	"fmt"
++	"github.com/golang/protobuf/proto"
++	otlplogs "go.opentelemetry.io/proto/otlp/logs/v1"
+ 	"os"
+ 	"runtime"
+ 	"time"
+@@ -129,6 +131,10 @@ var nl = []byte("\n")
+ 
+ func (c *console) publishEvent(event *publisher.Event) bool {
+ 	serializedEvent, err := c.codec.Encode(c.index, &event.Content)
++	// ld is OTLP unmarshaled log data, added this for test purposes only,
++	// will remove this in final code
++	ld := &otlplogs.ResourceLogs{}
++	_ = proto.Unmarshal(serializedEvent, ld)
+ 	if err != nil {
+ 		if !event.Guaranteed() {
+ 			return false
+diff --git a/libbeat/publisher/includes/includes.go b/libbeat/publisher/includes/includes.go
+index 68efbbffe8..ce5258e676 100644
+--- a/libbeat/publisher/includes/includes.go
++++ b/libbeat/publisher/includes/includes.go
+@@ -19,6 +19,7 @@ package includes
+ 
+ import (
+ 	_ "github.com/elastic/beats/v7/libbeat/outputs/codec/avro"
++	_ "github.com/elastic/beats/v7/libbeat/outputs/codec/otlp"
+ 	// import queue types
+ 	_ "github.com/elastic/beats/v7/libbeat/outputs/codec/format"
+ 	_ "github.com/elastic/beats/v7/libbeat/outputs/codec/json"

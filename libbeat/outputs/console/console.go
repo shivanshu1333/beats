@@ -21,6 +21,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/golang/protobuf/proto"
+	otlplogs "go.opentelemetry.io/proto/otlp/logs/v1"
 	"os"
 	"runtime"
 	"time"
@@ -129,6 +131,10 @@ var nl = []byte("\n")
 
 func (c *console) publishEvent(event *publisher.Event) bool {
 	serializedEvent, err := c.codec.Encode(c.index, &event.Content)
+	// ld is OTLP unmarshaled log data, added this for test purposes only,
+	// will remove this in final code
+	ld := &otlplogs.ResourceLogs{}
+	_ = proto.Unmarshal(serializedEvent, ld)
 	if err != nil {
 		if !event.Guaranteed() {
 			return false
