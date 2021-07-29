@@ -18,7 +18,6 @@
 package includes
 
 import (
-	_ "github.com/elastic/beats/v7/libbeat/outputs/codec/avro"
 	_ "github.com/elastic/beats/v7/libbeat/outputs/codec/otlp"
 	// import queue types
 	_ "github.com/elastic/beats/v7/libbeat/outputs/codec/format"
